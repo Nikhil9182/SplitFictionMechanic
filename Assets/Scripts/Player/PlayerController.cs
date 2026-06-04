@@ -1,50 +1,61 @@
 using System.Collections;
-using Unity.Cinemachine;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
 public class PlayerController : MonoBehaviour
 {
     private Transform cameraTransform;
+    private CharacterController controller;
 
     [Header("Movement")]
     [SerializeField] private float moveSpeed = 6f;
     [SerializeField] private float rotationSpeed = 15f;
 
+    [Header("Gravity")]
+    [SerializeField] private float gravity = -25f;
+    [SerializeField] private float groundedGravity = -2f;
+
     [Header("Jump")]
     [SerializeField] private float jumpHeight = 2f;
-    [SerializeField] private float gravity = -25f;
     [SerializeField] private int maxJumps = 2;
+
+    [Header("Jump Assist")]
+    [SerializeField] private float coyoteTime = 0.15f;
+    [SerializeField] private float jumpBufferTime = 0.15f;
 
     [Header("Dash")]
     [SerializeField] private float dashDistance = 6f;
     [SerializeField] private float dashDuration = 0.15f;
     [SerializeField] private float dashCooldown = 0.75f;
 
-    private CharacterController controller;
-
     private Vector2 moveInput;
     private Vector3 velocity;
 
-    private int jumpsRemaining;
+    private int jumpsUsed;
+
+    private float coyoteTimer;
+    private float jumpBufferTimer;
+
     private bool isDashing;
     private bool canDash = true;
 
+    private Vector3 dashVelocity;
+
     private void Awake()
     {
-        cameraTransform = GetComponentInChildren<Camera>().transform;
         controller = GetComponentInChildren<CharacterController>();
-    }
-
-    private void Start()
-    {
-        jumpsRemaining = maxJumps;
+        cameraTransform = GetComponentInChildren<Camera>().transform;
     }
 
     private void Update()
     {
-        HandleMovement();
+        UpdateGroundState();
+        UpdateJumpBuffer();
+        HandleJump();
         HandleGravity();
+        HandleMovement();
+
+        MoveCharacter();
     }
 
     public void SetSpawnPoint(Transform spawnPoint)
@@ -53,38 +64,58 @@ public class PlayerController : MonoBehaviour
         transform.rotation = spawnPoint.rotation;
     }
 
-    #region Movement
+    #region Ground
 
-    private void HandleMovement()
+    private void UpdateGroundState()
     {
-        if (isDashing)
+        if (controller.isGrounded)
+        {
+            coyoteTimer = coyoteTime;
+
+            if (velocity.y < 0f)
+                velocity.y = groundedGravity;
+
+            jumpsUsed = 0;
+        }
+        else
+        {
+            coyoteTimer -= Time.deltaTime;
+        }
+    }
+
+    #endregion
+
+    #region Jump
+
+    private void UpdateJumpBuffer()
+    {
+        if (jumpBufferTimer > 0f)
+            jumpBufferTimer -= Time.deltaTime;
+    }
+
+    private void HandleJump()
+    {
+        if (jumpBufferTimer <= 0f)
             return;
 
-        Vector3 forward = cameraTransform.forward;
-        Vector3 right = cameraTransform.right;
+        bool canGroundJump =
+            coyoteTimer > 0f &&
+            jumpsUsed == 0;
 
-        forward.y = 0;
-        right.y = 0;
+        bool canAirJump =
+            jumpsUsed > 0 &&
+            jumpsUsed < maxJumps;
 
-        forward.Normalize();
-        right.Normalize();
+        if (!canGroundJump && !canAirJump)
+            return;
 
-        Vector3 moveDirection =
-            forward * moveInput.y +
-            right * moveInput.x;
+        velocity.y =
+            Mathf.Sqrt(jumpHeight * -2f * gravity);
 
-        controller.Move(moveDirection * moveSpeed * Time.deltaTime);
+        jumpsUsed++;
 
-        if (moveDirection.sqrMagnitude > 0.01f)
-        {
-            Quaternion targetRotation =
-                Quaternion.LookRotation(moveDirection);
-
-            transform.rotation = Quaternion.Slerp(
-                transform.rotation,
-                targetRotation,
-                rotationSpeed * Time.deltaTime);
-        }
+        jumpBufferTimer = 0f;
+        coyoteTimer = 0f;
     }
 
     #endregion
@@ -93,22 +124,74 @@ public class PlayerController : MonoBehaviour
 
     private void HandleGravity()
     {
-        if (controller.isGrounded)
-        {
-            if (velocity.y < 0)
-                velocity.y = -2f;
-
-            jumpsRemaining = maxJumps;
-        }
-
         velocity.y += gravity * Time.deltaTime;
-
-        controller.Move(velocity * Time.deltaTime);
     }
 
     #endregion
 
-    #region Input Callbacks
+    #region Movement
+
+    private void HandleMovement()
+    {
+        if (isDashing)
+            return;
+
+        Vector3 moveDirection =
+            GetCameraRelativeDirection(moveInput);
+
+        if (moveDirection.sqrMagnitude > 0.001f)
+        {
+            Quaternion targetRotation =
+                Quaternion.LookRotation(moveDirection);
+
+            float rotationLerp =
+                1f - Mathf.Exp(-rotationSpeed * Time.deltaTime);
+
+            transform.rotation =
+                Quaternion.Slerp(
+                    transform.rotation,
+                    targetRotation,
+                    rotationLerp);
+        }
+    }
+
+    private Vector3 GetCameraRelativeDirection(Vector2 input)
+    {
+        Vector3 forward = cameraTransform.forward;
+        Vector3 right = cameraTransform.right;
+
+        forward.y = 0f;
+        right.y = 0f;
+
+        forward.Normalize();
+        right.Normalize();
+
+        return (
+            forward * input.y +
+            right * input.x
+        ).normalized;
+    }
+
+    private void MoveCharacter()
+    {
+        Vector3 moveDirection =
+            GetCameraRelativeDirection(moveInput);
+
+        Vector3 horizontalVelocity =
+            moveDirection * moveSpeed;
+
+        Vector3 finalVelocity =
+            horizontalVelocity +
+            dashVelocity;
+
+        finalVelocity.y = velocity.y;
+
+        controller.Move(finalVelocity * Time.deltaTime);
+    }
+
+    #endregion
+
+    #region Input
 
     public void OnMove(InputAction.CallbackContext context)
     {
@@ -120,13 +203,7 @@ public class PlayerController : MonoBehaviour
         if (!context.performed)
             return;
 
-        if (jumpsRemaining <= 0)
-            return;
-
-        velocity.y =
-            Mathf.Sqrt(jumpHeight * -2f * gravity);
-
-        jumpsRemaining--;
+        jumpBufferTimer = jumpBufferTime;
     }
 
     public void OnDash(InputAction.CallbackContext context)
@@ -151,37 +228,25 @@ public class PlayerController : MonoBehaviour
 
         Vector3 dashDirection;
 
-        if (moveInput.magnitude > 0.1f)
+        if (moveInput.sqrMagnitude > 0.01f)
         {
-            Vector3 forward = cameraTransform.forward;
-            Vector3 right = cameraTransform.right;
-
-            forward.y = 0;
-            right.y = 0;
-
             dashDirection =
-                (forward * moveInput.y +
-                 right * moveInput.x).normalized;
+                GetCameraRelativeDirection(moveInput);
         }
         else
         {
             dashDirection = transform.forward;
         }
 
-        float elapsed = 0f;
-        float dashSpeed = dashDistance / dashDuration;
+        float dashSpeed =
+            dashDistance / dashDuration;
 
-        while (elapsed < dashDuration)
-        {
-            controller.Move(
-                dashDirection *
-                dashSpeed *
-                Time.deltaTime);
+        dashVelocity =
+            dashDirection * dashSpeed;
 
-            elapsed += Time.deltaTime;
+        yield return new WaitForSeconds(dashDuration);
 
-            yield return null;
-        }
+        dashVelocity = Vector3.zero;
 
         isDashing = false;
 
