@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -28,6 +29,24 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float dashDuration = 0.15f;
     [SerializeField] private float dashCooldown = 0.75f;
 
+    [Header("Shoot")]
+    [SerializeField] private Transform aimTarget;
+    [SerializeField] private Transform projectileSpawnPoint;
+    [SerializeField] private StickyExplosive projectilePrefab;
+
+    private StickyExplosive activeExplosive;
+
+    [Header("Animation")]
+    [SerializeField] private PlayerAnimationController animationController;
+
+    public bool IsGrounded => controller.isGrounded;
+    public bool IsDashing => isDashing;
+    public bool IsAiming => isAiming;
+    public float MoveMagnitude => moveInput.magnitude;
+    public float VerticalVelocity => velocity.y;
+
+    Coroutine currentShootRoutine;
+
     private Vector2 moveInput;
     private Vector3 velocity;
 
@@ -36,6 +55,7 @@ public class PlayerController : MonoBehaviour
     private float coyoteTimer;
     private float jumpBufferTimer;
 
+    private bool isAiming;
     private bool isDashing;
     private bool canDash = true;
 
@@ -45,12 +65,14 @@ public class PlayerController : MonoBehaviour
     {
         controller = GetComponentInChildren<CharacterController>();
         cameraTransform = GetComponentInChildren<Camera>().transform;
+        animationController = GetComponent<PlayerAnimationController>();
     }
 
     private void Update()
     {
         UpdateGroundState();
         UpdateJumpBuffer();
+        UpdateAimTargetPosition();
         HandleJump();
         HandleGravity();
         HandleMovement();
@@ -60,8 +82,10 @@ public class PlayerController : MonoBehaviour
 
     public void SetSpawnPoint(Transform spawnPoint)
     {
-        transform.position = spawnPoint.position;
-        transform.rotation = spawnPoint.rotation;
+        if (controller == null) controller = GetComponentInChildren<CharacterController>(true);
+        controller.transform.position = spawnPoint.position;
+        controller.transform.rotation = spawnPoint.rotation;
+        controller.enabled = true;
     }
 
     #region Ground
@@ -215,6 +239,70 @@ public class PlayerController : MonoBehaviour
             return;
 
         StartCoroutine(DashRoutine());
+    }
+
+    public void OnShoot(InputAction.CallbackContext context)
+    {
+        if (!context.performed)
+            return;
+
+
+        if (activeExplosive != null)
+        {
+            activeExplosive.Detonate();
+        }
+        else if (currentShootRoutine == null)
+        {
+            currentShootRoutine = StartCoroutine(ShootRoutine());
+        }
+    }
+
+    #endregion
+
+    #region Shoot
+
+    private void FireProjectile()
+    {
+        StickyExplosive projectile =
+            Instantiate(
+                projectilePrefab,
+                projectileSpawnPoint.position,
+                projectileSpawnPoint.rotation);
+
+        projectile.Initialize(this, aimTarget.position - projectileSpawnPoint.position);
+
+        activeExplosive = projectile;
+    }
+
+    private void UpdateAimTargetPosition()
+    {
+        if (!isAiming) return;
+
+        if (Physics.Raycast(cameraTransform.position, cameraTransform.forward, out RaycastHit hit, 200f))
+        {
+            aimTarget.position = hit.point;
+        }
+        else
+        {
+            aimTarget.position = cameraTransform.position + cameraTransform.forward * 200f;
+        }
+
+        //aimTarget.position = cameraTransform.position + cameraTransform.forward * 100f;
+        aimTarget.forward = cameraTransform.forward;
+    }
+
+    private IEnumerator ShootRoutine()
+    {
+        isAiming = true;
+
+        yield return new WaitForSeconds(0.08f);
+
+        FireProjectile();
+        currentShootRoutine = null;
+
+        yield return new WaitForSeconds(0.15f);
+
+        isAiming = false;
     }
 
     #endregion

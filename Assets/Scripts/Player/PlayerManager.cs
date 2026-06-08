@@ -40,6 +40,9 @@ public class PlayerManager : MonoBehaviour
         int index = players.Count - 1;
         var playerCameraHandler = input.GetComponent<PlayerCinemachineCameraHandler>();
         playerCameraHandler.SetCinemachineCamera(index, playerChannels[index], input);
+
+        var playerVisuals = input.GetComponent<PlayerVisuals>();
+        playerVisuals.SetPlayerColor(index);
     }
 
     private void HandlePlayerLeft(PlayerInput input)
